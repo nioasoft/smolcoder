@@ -62,14 +62,14 @@ test("a bare host means both usual ports; anything more specific names one serve
   assert.deepEqual(parseAddress(" 192.168.1.50 "), {
     address: "192.168.1.50",
     hostname: "192.168.1.50",
-    urls: ["http://192.168.1.50:11434", "http://192.168.1.50:1234"],
+    urls: ["http://192.168.1.50:11434", "http://192.168.1.50:1234", "http://192.168.1.50:8000"],
   });
-  assert.deepEqual(parseAddress("GPU-Box.local").urls, ["http://gpu-box.local:11434", "http://gpu-box.local:1234"]);
+  assert.deepEqual(parseAddress("GPU-Box.local").urls, ["http://gpu-box.local:11434", "http://gpu-box.local:1234", "http://gpu-box.local:8000"]);
   assert.deepEqual(parseAddress("gpu-box:4321").urls, ["http://gpu-box:4321"]);
   assert.deepEqual(parseAddress("box:80").urls, ["http://box"], "a typed default port still means that one server");
   assert.deepEqual(parseAddress("https://llm.example.com/").urls, ["https://llm.example.com"]);
   assert.deepEqual(parseAddress("https://llm.example.com/ollama/").urls, ["https://llm.example.com/ollama"]);
-  assert.deepEqual(parseAddress("fe80::1").urls, ["http://[fe80::1]:11434", "http://[fe80::1]:1234"]);
+  assert.deepEqual(parseAddress("fe80::1").urls, ["http://[fe80::1]:11434", "http://[fe80::1]:1234", "http://[fe80::1]:8000"]);
   assert.deepEqual(parseAddress("[fe80::1]:9000").urls, ["http://[fe80::1]:9000"]);
 });
 
@@ -275,4 +275,19 @@ test("the same model id on two machines stays unambiguous", () => {
   const rows = modelOptions([here, there, lm], there);
   assert.deepEqual(rows.map((r) => r.hint.replace(/4.096/, "4096")), ["ollama", "ollama · gpu-box", "lm studio · ctx 4096"]);
   assert.deepEqual(rows.map((r) => r.current), [false, true, false]);
+});
+
+test("a resumed session whose server is gone continues on another one", () => {
+  const { pickModel } = require("../dist/session");
+  const omlx = { id: "qwen3.8-27b", backend: "omlx", baseUrl: "http://127.0.0.1:8000", contextWindow: 32768 };
+  const resumed = { resumed: true, backend: "mtplx", model: "mtplx-qwen38", baseUrl: "http://127.0.0.1:8001" };
+  const chosen = pickModel([omlx], resumed, {});
+  assert.equal(chosen.id, "qwen3.8-27b");
+  assert.match(chosen.note, /mtplx-qwen38 is not available any more — continuing with qwen3\.8-27b/);
+  // Still there: resumed exactly, no note.
+  const mt = { id: "mtplx-qwen38", backend: "mtplx", baseUrl: "http://127.0.0.1:8001", contextWindow: 262144 };
+  assert.deepEqual(pickModel([omlx, mt], resumed, {}), mt);
+  // An explicit --model is a requirement, as before.
+  assert.throws(() => pickModel([omlx], { model: "mtplx-qwen38" }, {}), /was not found/);
+  assert.equal(pickModel([], resumed, {}), null);
 });

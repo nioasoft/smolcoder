@@ -20,6 +20,7 @@ import { noBackendsMessage, prepareModel, Session, SessionPrefs, SessionSnapshot
 import { tryFetchJson } from "../util";
 import { Attachment, classifyUpload, extOf, MAX_UPLOAD_BYTES, mimeForExt, safeName } from "../attachments";
 import { Event, SessionChannel, uploadUrl } from "./channel";
+import { addMachine, removeMachine, renameMachine, saveDefaults, settingsView, setServerKey } from "../settings";
 import { PAGE_HTML } from "./page";
 import { SessionMeta, SessionStore, WorkspaceStore, workspaceKey } from "./store";
 import { Terminal } from "./terminal";
@@ -456,7 +457,7 @@ export class WebHub {
       // A saved bypass mode is not inherited silently, same as the config:
       // the user re-enables it per session.
       const mode = restore.mode === "bypass" ? "edit" : restore.mode ?? prefs.mode;
-      prefs = { ...prefs, mode, backend: restore.backend, model: restore.model ?? prefs.model, baseUrl: restore.baseUrl, effort: restore.effort !== undefined ? restore.effort : prefs.effort };
+      prefs = { ...prefs, mode, backend: restore.backend, model: restore.model ?? prefs.model, baseUrl: restore.baseUrl, effort: restore.effort !== undefined ? restore.effort : prefs.effort, resumed: true };
     }
     try {
       const session = await this.factory(live.channel, live.workspace, prefs);
@@ -482,6 +483,8 @@ export class WebHub {
       session.run().catch((err) => live.channel.error(String(err?.message ?? err)));
     } catch (err: any) {
       live.error = String(err?.message ?? err);
+      // A failed start must not leave "looking for model servers…" spinning.
+      live.channel.stopSpinner();
       live.channel.phase = "error";
       live.channel.error(live.error);
       live.channel.warn("Start a backend, then click this session in the sidebar to retry.");
@@ -698,6 +701,12 @@ export class WebHub {
         case "/upload":
           this.serveUpload(res, url);
           return;
+        case "/settings":
+          settingsView().then(
+            (v) => json(200, v),
+            (err) => json(500, { error: String(err?.message ?? err) })
+          );
+          return;
         default:
           res.writeHead(404);
           res.end();
@@ -721,11 +730,13 @@ export class WebHub {
         } catch {
           /* ignore */
         }
-        try {
-          json(200, this.handlePost(url.pathname, data) ?? {});
-        } catch (err: any) {
-          json(400, { error: String(err?.message ?? err) });
-        }
+        // Settings endpoints wait on the network; the rest answer at once.
+        Promise.resolve()
+          .then(() => this.handlePost(url.pathname, data))
+          .then(
+            (r) => json(200, r ?? {}),
+            (err: any) => json(400, { error: String(err?.message ?? err) })
+          );
       });
       return;
     }
@@ -943,6 +954,24 @@ export class WebHub {
         t.interrupt();
         return {};
       }
+      case "/settings/key":
+        return setServerKey(String(d.baseUrl ?? ""), typeof d.key === "string" ? d.key : null);
+      case "/settings/machines/add":
+        return addMachine(String(d.address ?? ""), typeof d.apiKey === "string" && d.apiKey.trim() ? d.apiKey.trim() : undefined, d.outsideOk === true);
+      case "/settings/machines/remove":
+        removeMachine(String(d.address ?? ""));
+        return {};
+      case "/settings/machines/rename":
+        renameMachine(String(d.address ?? ""), String(d.name ?? ""));
+        return {};
+      case "/settings/defaults":
+        saveDefaults({
+          ...(typeof d.model === "string" ? { model: d.model } : {}),
+          ...(typeof d.modelUrl === "string" ? { modelUrl: d.modelUrl } : {}),
+          ...(d.effort === null || typeof d.effort === "string" ? { effort: d.effort } : {}),
+          ...(typeof d.mode === "string" ? { mode: d.mode } : {}),
+        });
+        return {};
       case "/term/close":
         this.closeTerminal(sid, String(d.tid ?? ""));
         return {};
