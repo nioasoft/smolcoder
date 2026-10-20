@@ -227,3 +227,12 @@ test("web: a model that cannot call tools is not told it can search", () => {
   assert.ok(makeWebContext(on, "edit", new Set(), undefined), "unknown support keeps it, like the tool schemas");
   assert.ok(makeWebContext(on, "edit", new Set(), true));
 });
+
+test("web: a chat-only model's prompt never mentions the web tools, even with web on", () => {
+  // #20 gives a model without tools its own short chat prompt; the web line
+  // belongs only in the tool prompt, and the agent sends it no tools at all.
+  const { buildSystemPrompt } = require("../dist/prompt");
+  const chat = buildSystemPrompt({ workspace: "/w", mode: "edit", shellLabel: "zsh", chatOnly: true, web: true });
+  assert.doesNotMatch(chat, /web_search|web_fetch/);
+  assert.match(chat, /no tools/);
+});
